@@ -1,0 +1,15 @@
+{
+  "name": "ruah-tech",
+  "description": "Claude Code plugins from Ruah Tech Solutions. Powered by www.Ruah.ai",
+  "owner": {
+    "name": "Ruah Tech Solutions",
+    "url": "https://github.com/RuahTechSolutions"
+  },
+  "plugins": [
+    {
+      "name": "code-buddy",
+      "source": "./",
+      "description": "Staging guard, blast radius, edit replay and an agents panel for Claude Code, in one mod."
+    }
+  ]
+}

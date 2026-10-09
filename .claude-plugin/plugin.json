@@ -1,0 +1,41 @@
+{
+  "name": "code-buddy",
+  "displayName": "Code Buddy",
+  "version": "1.0.0",
+  "description": "Holds risky tool calls (production domains, live Stripe keys, protected-branch pushes, deploys, destructive commands) for your OK, replays each turn's edits, and tracks every subagent's progress, tokens and cost.",
+  "author": {
+    "name": "Ruah Tech Solutions",
+    "url": "https://github.com/RuahTechSolutions"
+  },
+  "homepage": "https://github.com/RuahTechSolutions/code-buddy",
+  "repository": "https://github.com/RuahTechSolutions/code-buddy",
+  "license": "Apache-2.0",
+  "keywords": ["mods", "safety", "guard", "git", "deploy", "replay", "diff", "subagents", "cost"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "productionDomains": {
+      "type": "string",
+      "title": "Production domains",
+      "description": "Comma-separated hosts; *.example.com matches every subdomain. A shell command, web request or browser call that targets one is held. Leave empty to skip the domain rule.",
+      "default": ""
+    },
+    "stagingDomains": {
+      "type": "string",
+      "title": "Staging domains",
+      "description": "Comma-separated hosts. Production wins on overlap: only an exact host listed here (no wildcard) is let through.",
+      "default": ""
+    },
+    "protectedBranch": {
+      "type": "string",
+      "title": "Protected branch",
+      "description": "Pushes to it and merges into it are held. Comma-separated; * matches within a name.",
+      "default": "main"
+    },
+    "guard": {
+      "type": "boolean",
+      "title": "Guard",
+      "description": "On holds risky calls; off lets everything through (replay and agents keep working).",
+      "default": true
+    }
+  }
+}
