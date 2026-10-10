@@ -1,7 +1,7 @@
 {
   "name": "code-buddy",
   "displayName": "Code Buddy",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Holds risky tool calls (production domains, live Stripe keys, protected-branch pushes, deploys, destructive commands) for your OK, replays each turn's edits, and tracks every subagent's progress, tokens and cost.",
   "author": {
     "name": "Ruah Tech Solutions",
@@ -35,6 +35,18 @@
       "type": "boolean",
       "title": "Guard",
       "description": "On holds risky calls; off lets everything through (replay and agents keep working).",
+      "default": true
+    },
+    "agentBudgetUsd": {
+      "type": "number",
+      "title": "Subagent budget (USD)",
+      "description": "Estimated subagent spend per session that turns the agents bar coral and raises one toast when passed. 0 turns it off.",
+      "default": 0
+    },
+    "autoOpenAgents": {
+      "type": "boolean",
+      "title": "Auto-open agents panel",
+      "description": "Open the agents panel by itself when a second subagent starts in a turn (once per turn).",
       "default": true
     }
   }

@@ -77,8 +77,21 @@ export type AgentRun = {
   costUsd: number
   /** Model requests seen. */
   steps: number
+  /** Tool calls it has made. */
+  tools?: number
+  /** What it is doing now, e.g. "Read · src/api/routes.ts" (masked); cleared when it ends. */
+  activity?: string
   /** The main prompt it was started under; the band's bar counts the current one. */
   batch: number
+}
+
+/** The agents panel's own state. */
+export type AgentsUi = {
+  isCompact: boolean
+  /** The batch the panel last opened itself for, so a close sticks for that prompt. */
+  autoOpenedBatch: number
+  /** The budget the toast last fired for (0: none yet), so it fires once per budget. */
+  budgetAlertedAt: number
 }
 
 declare module 'claude-code' {
@@ -92,6 +105,7 @@ declare module 'claude-code' {
       agents: AgentRun[]
       /** Counts main prompts, so the bar knows which subagents are this prompt's. */
       batch: number
+      agentsUi: AgentsUi
     }
   }
 }

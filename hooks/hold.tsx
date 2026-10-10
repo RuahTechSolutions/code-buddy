@@ -200,13 +200,13 @@ export function drawHoldBand(ui: Ui, surface: Surface, view: HoldView, behind: n
 }
 
 /** The idle band: the brand badge, guard state, how many calls were held. */
-export function drawIdleBand(ui: Ui, surface: Surface, isOn: boolean, held: number, columns: number) {
+export function drawIdleBand(ui: Ui, surface: Surface, isOn: boolean, held: number, columns: number, overBudget = '') {
   const { Text } = ui
   const words = `Code Buddy · guard ${isOn ? 'on' : 'off'} · ${held} held`
   if (surface === 'desktop' && 'Svg' in ui) {
     const { Svg } = ui
-    const W = Math.min(pxOf(columns, 0, 200), 360)
-    return <Svg key="idle" source={idleBandSvg(W, isOn, held)} alt={words} width={W} height={24} />
+    const W = Math.min(pxOf(columns, 0, 200), overBudget ? 520 : 360)
+    return <Svg key="idle" source={idleBandSvg(W, isOn, held, overBudget)} alt={overBudget ? `${words} · ${overBudget}` : words} width={W} height={24} />
   }
   return (
     <Text wrap="truncate-end">
@@ -217,6 +217,7 @@ export function drawIdleBand(ui: Ui, surface: Surface, isOn: boolean, held: numb
         {isOn ? '  ● guard on' : '  ○ guard off'}
       </Text>
       <Text dimColor>{`  ·  ${held} held`}</Text>
+      {overBudget ? <Text color={BRAND.coral} bold>{`  ·  ${overBudget}`}</Text> : null}
     </Text>
   )
 }

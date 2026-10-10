@@ -87,7 +87,7 @@ function badge(x: number, y: number, h: number, label: string, alert: boolean): 
 const BAND_H = 24
 
 /** Idle band: badge, guard state, how many calls were held. */
-export function idleBandSvg(W: number, isOn: boolean, held: number): string {
+export function idleBandSvg(W: number, isOn: boolean, held: number, overBudget = ''): string {
   const b = badge(0, 2, 20, 'Code Buddy', false)
   let x = b.w + 12
   const dot = isOn
@@ -99,7 +99,12 @@ export function idleBandSvg(W: number, isOn: boolean, held: number): string {
   const label = `${held} held`
   const cw = Math.round(textWidth(label, 11.5) + 18)
   const chip = `<rect class="chip" x="${x}" y="4" width="${cw}" height="16" rx="8"/><text class="chipt" x="${x + cw / 2}" y="${BAND_H / 2 + 4}" text-anchor="middle" font-family="${FONT}" font-size="11.5" font-weight="600">${xml(label)}</text>`
-  return svg(W, BAND_H, `${b.body}${dot}${guard}${chip}`)
+  x += cw + 8
+  const ow = Math.round(textWidth(overBudget, 11.5) + 18)
+  const over = overBudget
+    ? `<rect x="${x}" y="4" width="${ow}" height="16" rx="8" fill="${BRAND.coral}" fill-opacity=".16"/><text x="${x + ow / 2}" y="${BAND_H / 2 + 4}" text-anchor="middle" font-family="${FONT}" font-size="11.5" font-weight="700" fill="${BRAND.coral}">${xml(overBudget)}</text>`
+    : ''
+  return svg(W, BAND_H, `${b.body}${dot}${guard}${chip}${over}`)
 }
 
 /** Band while a call waits: coral badge, the rule, the command. */
@@ -277,60 +282,78 @@ export type AgentRowView = {
   elapsed: string
   tokens: string
   cost: string
+  /** What a running subagent is doing now, e.g. "Read · src/api/routes.ts". */
+  activity?: string
+  /** "step 4 · 9 tools" */
+  progress?: string
 }
+
+/** Spend against the budget, for the panel's header and the band. */
+export type BudgetView = { limit: string; used: string; ratio: number; isOver: boolean }
 
 const STATUS_COLOR = { running: BRAND.sky, done: GREEN, failed: BRAND.coral, stopped: BRAND.muted } as const
 
-function statusMark(cx: number, cy: number, status: AgentRowView['status']): string {
+function statusMark(cx: number, cy: number, status: AgentRowView['status'], r = 9): string {
   const c = STATUS_COLOR[status]
+  const s = r / 9
   if (status === 'running') {
-    return `<circle class="pulse" cx="${cx}" cy="${cy}" r="9" fill="${c}" fill-opacity=".18"/><circle cx="${cx}" cy="${cy}" r="4.5" fill="${c}"/>`
+    return `<circle class="pulse" cx="${cx}" cy="${cy}" r="${r}" fill="${c}" fill-opacity=".18"/><circle cx="${cx}" cy="${cy}" r="${4.5 * s}" fill="${c}"/>`
   }
-  const ring = `<circle cx="${cx}" cy="${cy}" r="9" fill="${c}" fill-opacity=".14"/>`
-  if (status === 'done') return `${ring}<path d="M${cx - 4} ${cy}l2.8 2.8 5.2-5.6" fill="none" stroke="${c}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>`
-  if (status === 'failed') return `${ring}<path d="M${cx - 3.4} ${cy - 3.4}l6.8 6.8M${cx + 3.4} ${cy - 3.4}l-6.8 6.8" stroke="${c}" stroke-width="1.9" stroke-linecap="round"/>`
-  return `${ring}<rect x="${cx - 3.2}" y="${cy - 3.2}" width="6.4" height="6.4" rx="1.2" fill="${c}"/>`
+  const ring = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${c}" fill-opacity=".14"/>`
+  if (status === 'done') return `${ring}<path d="M${cx - 4 * s} ${cy}l${2.8 * s} ${2.8 * s} ${5.2 * s}-${5.6 * s}" fill="none" stroke="${c}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>`
+  if (status === 'failed') return `${ring}<path d="M${cx - 3.4 * s} ${cy - 3.4 * s}l${6.8 * s} ${6.8 * s}M${cx + 3.4 * s} ${cy - 3.4 * s}l-${6.8 * s} ${6.8 * s}" stroke="${c}" stroke-width="1.9" stroke-linecap="round"/>`
+  return `${ring}<rect x="${cx - 3.2 * s}" y="${cy - 3.2 * s}" width="${6.4 * s}" height="${6.4 * s}" rx="1.2" fill="${c}"/>`
 }
 
-/** A progress bar: finished in the brand gradient, running as a lighter, moving stripe. */
-function progressBar(x: number, y: number, w: number, h: number, done: number, running: number, total: number, onCard: boolean): string {
+/** A progress bar: finished in the brand gradient (coral when over budget), running as a lighter, moving stripe. */
+function progressBar(x: number, y: number, w: number, h: number, done: number, running: number, total: number, onCard: boolean, isOver = false): string {
   const fw = total ? Math.round((w * done) / total) : 0
   const rw = total ? Math.round((w * Math.min(total - done, running)) / total) : 0
   const track = onCard ? `fill="${BRAND.white}" fill-opacity=".22"` : 'class="chip"'
-  const fill = onCard ? `fill="${BRAND.white}"` : 'fill="url(#cb-brand)"'
+  const fill = isOver ? 'fill="url(#cb-alert)"' : onCard ? `fill="${BRAND.white}"` : 'fill="url(#cb-brand)"'
   const id = `cb-bar-${x}-${y}`
   return `<clipPath id="${id}"><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${h / 2}"/></clipPath>
 <g clip-path="url(#${id})"><rect x="${x}" y="${y}" width="${w}" height="${h}" ${track}/>
 <rect x="${x}" y="${y}" width="${fw}" height="${h}" ${fill}/>
-${rw > 0 ? `<rect class="pulse" x="${x + fw}" y="${y}" width="${rw}" height="${h}" fill="${onCard ? BRAND.white : BRAND.sky}" fill-opacity="${onCard ? 0.45 : 0.45}"/>` : ''}</g>`
+${rw > 0 ? `<rect class="pulse" x="${x + fw}" y="${y}" width="${rw}" height="${h}" fill="${isOver ? BRAND.coral : onCard ? BRAND.white : BRAND.sky}" fill-opacity=".45"/>` : ''}</g>`
 }
 
-/** Band: badge, "Agents", the bar, finished of total and the cost so far. */
-export function agentsBandSvg(W: number, done: number, running: number, total: number, cost: string): string {
+/** Band: badge, "Agents", the bar, finished of total and the cost so far (coral past the budget). */
+export function agentsBandSvg(W: number, done: number, running: number, total: number, cost: string, isOver = false): string {
   const b = badge(0, 2, 20, 'Code Buddy', false)
   let x = b.w + 12
   const label = 'Agents'
   const head = `<text class="t" x="${x}" y="${BAND_H / 2 + 4.5}" font-family="${FONT}" font-size="12.5" font-weight="600">${label}</text>`
   x += textWidth(label, 12.5) + 12
   const tail = `${done} / ${total} finished · ${cost}`
-  const tw = textWidth(tail, 12.5) + 6
+  const over = isOver ? ' · over budget' : ''
+  const tw = textWidth(tail + over, 12.5) + 6
   const barW = Math.max(60, Math.min(320, W - x - tw - 12))
-  const bar = progressBar(x, BAND_H / 2 - 4, barW, 8, done, running, total, false)
-  return svg(W, BAND_H, `${b.body}${head}${bar}<text class="m" x="${x + barW + 12}" y="${BAND_H / 2 + 4.5}" font-family="${FONT}" font-size="12.5" font-variant-numeric="tabular-nums">${xml(tail)}</text>`)
+  const bar = progressBar(x, BAND_H / 2 - 4, barW, 8, done, running, total, false, isOver)
+  const tx = x + barW + 12
+  return svg(
+    W,
+    BAND_H,
+    `${b.body}${head}${bar}<text class="m" x="${tx}" y="${BAND_H / 2 + 4.5}" font-family="${FONT}" font-size="12.5" font-variant-numeric="tabular-nums">${xml(tail)}${isOver ? `<tspan fill="${BRAND.coral}" font-weight="700">${over}</tspan>` : ''}</text>`,
+  )
 }
 
 export const AGENTS_HEADER_H = 96
 
-/** The agents pane's summary card: finished of total, a bar, cost, tokens and time. */
-export function agentsHeaderSvg(W: number, done: number, running: number, total: number, stats: [string, string][]): string {
+/** The agents pane's summary card: finished of total, a bar, cost, tokens, time and the budget. */
+export function agentsHeaderSvg(W: number, done: number, running: number, total: number, stats: [string, string][], budget?: BudgetView): string {
   const H = AGENTS_HEADER_H
   const right = `${done} of ${total} finished`
-  const tiles = stats
-    .map(([k, v], i) => {
-      const tw = (W - 32) / stats.length
+  const tiles: [string, string, boolean][] = stats.map(([k, v]) => [k, v, false])
+  if (budget) tiles.push(['Budget', budget.isOver ? `Over ${budget.limit}` : `${Math.round(budget.ratio * 100)}% of ${budget.limit}`, budget.isOver])
+  const tw = (W - 32) / tiles.length
+  const tileSvg = tiles
+    .map(([k, v, alert], i) => {
       const x = 16 + i * tw
+      const vw = textWidth(v, 15) + 14
       return `<text x="${x}" y="${H - 30}" font-family="${FONT}" font-size="10.5" font-weight="600" letter-spacing=".8" fill="${BRAND.white}" fill-opacity=".7">${xml(k.toUpperCase())}</text>
-<text x="${x}" y="${H - 12}" font-family="${FONT}" font-size="15" font-weight="600" font-variant-numeric="tabular-nums" fill="${BRAND.white}">${xml(v)}</text>`
+${alert ? `<rect x="${x - 7}" y="${H - 28}" width="${vw}" height="22" rx="11" fill="${BRAND.coral}"/>` : ''}
+<text x="${x}" y="${H - 12}" font-family="${FONT}" font-size="15" font-weight="600" font-variant-numeric="tabular-nums" fill="${BRAND.white}">${xml(fit(v, 15, tw - 12))}</text>`
     })
     .join('')
   return svg(
@@ -341,21 +364,27 @@ export function agentsHeaderSvg(W: number, done: number, running: number, total:
 ${wave(0, 0, BRAND.white).replace('<g transform="translate(0,0)"', `<g transform="translate(16,10) scale(1.15)"`)}
 <text x="40" y="23" font-family="${FONT}" font-size="14.5" font-weight="600" fill="${BRAND.white}">Subagents</text>
 <text x="${W - 16}" y="23" text-anchor="end" font-family="${FONT}" font-size="12" font-weight="600" fill="${BRAND.white}" fill-opacity=".85">${xml(right)}</text>
-${progressBar(16, 34, W - 32, 7, done, running, total, true)}
-${tiles}`,
+${progressBar(16, 34, W - 32, 7, done, running, total, true, budget?.isOver ?? false)}
+${tileSvg}`,
   )
 }
 
-export const AGENT_ROW_H = 54
+/** A full row is 54 px, 72 with a running subagent's activity line. */
+export const agentRowHeight = (a: AgentRowView): number => (a.status === 'running' && a.activity ? 72 : 54)
 
-/** One subagent: status, description, type and model, elapsed, tokens, cost. */
+/** One subagent: status, description, type and model, elapsed, tokens, cost, and what it is doing now. */
 export function agentRowSvg(W: number, a: AgentRowView): string {
-  const H = AGENT_ROW_H
-  const stats = `${a.elapsed}   ${a.tokens}   ${a.cost}`
-  const sw = textWidth(stats, 11.5, true) + 4
+  const H = agentRowHeight(a)
+  const sw = textWidth(`${a.tokens} · ${a.cost}`, 11.5, true) + 4
   const textW = W - 40 - sw - 16
   const chip = fit(a.type, 10.5, 140)
   const cw = Math.round(textWidth(chip, 10.5) + 14)
+  const live = a.status === 'running' && a.activity
+  const activity = live
+    ? `<path d="M40 ${H - 22}l5 3.5-5 3.5z" fill="${BRAND.sky}"/>
+<text x="51" y="${H - 14.5}" font-family="${MONO}" font-size="11.5" fill="${BRAND.sky}">${xml(fit(a.activity ?? '', 11.5, W - 51 - textWidth(a.progress ?? '', 11) - 16, true))}</text>
+<text class="m" x="${W}" y="${H - 14.5}" text-anchor="end" font-family="${FONT}" font-size="11">${xml(a.progress ?? '')}</text>`
+    : ''
   const shimmer =
     a.status === 'running'
       ? `<rect class="pulse" x="40" y="${H - 4}" width="${W - 40}" height="2" rx="1" fill="${BRAND.sky}" fill-opacity=".6"/>`
@@ -370,6 +399,29 @@ export function agentRowSvg(W: number, a: AgentRowView): string {
 <text class="m" x="${40 + cw + 8}" y="41" font-family="${FONT}" font-size="11.5">${xml(fit(a.model, 11.5, Math.max(40, textW - cw - 8)))}</text>
 <text class="t" x="${W}" y="20" text-anchor="end" font-family="${MONO}" font-size="11.5">${xml(a.elapsed)}</text>
 <text class="m" x="${W}" y="41" text-anchor="end" font-family="${MONO}" font-size="11.5">${xml(`${a.tokens} · ${a.cost}`)}</text>
+${activity}
 ${shimmer}`,
+  )
+}
+
+export const COMPACT_ROW_H = 26
+
+/** The compact row: one line per subagent. */
+export function compactAgentRowSvg(W: number, a: AgentRowView): string {
+  const H = COMPACT_ROW_H
+  const right = `${a.model} · ${a.elapsed} · ${a.cost}`
+  const rw = textWidth(right, 11.5, true) + 8
+  const middle = a.status === 'running' && a.activity ? a.activity : ''
+  const titleW = Math.max(60, (W - 24 - rw) * (middle ? 0.55 : 1))
+  const title = fit(a.title, 12.5, titleW)
+  const mx = 24 + textWidth(title, 12.5) + 12
+  return svg(
+    W,
+    H,
+    `${statusMark(9, H / 2, a.status, 7)}
+<text class="t" x="24" y="${H / 2 + 4.5}" font-family="${FONT}" font-size="12.5" font-weight="600">${xml(title)}</text>
+${middle ? `<text x="${mx}" y="${H / 2 + 4.5}" font-family="${MONO}" font-size="11" fill="${BRAND.sky}">${xml(fit(middle, 11, Math.max(0, W - rw - mx - 8), true))}</text>` : ''}
+<text class="m" x="${W}" y="${H / 2 + 4.5}" text-anchor="end" font-family="${MONO}" font-size="11.5">${xml(right)}</text>
+<line class="ln" x1="24" y1="${H - 0.5}" x2="${W}" y2="${H - 0.5}"/>`,
   )
 }

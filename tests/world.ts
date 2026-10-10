@@ -20,6 +20,8 @@ export type WorldOptions = {
 
 export type World = {
   opened: string[]
+  /** Each $.ui.open's arguments, in order. */
+  openArgs: Record<string, unknown>[]
   closed: string[]
   toasts: string[]
   ran: string[]
@@ -34,6 +36,7 @@ export function world(on: On, opts: WorldOptions = {}): World {
   const waiting: (() => void)[] = []
   const w: World = {
     opened: [],
+    openArgs: [],
     closed: [],
     toasts: [],
     ran: [],
@@ -68,6 +71,7 @@ export function world(on: On, opts: WorldOptions = {}): World {
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('ui.open', ($, e) => {
     w.opened.push(e.id)
+    w.openArgs.push({ ...e })
     return { value: { isPlaced: true as const } }
   })
   on('ui.close', ($, e) => {
