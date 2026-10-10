@@ -85,8 +85,54 @@ export type AgentRun = {
   batch: number
 }
 
+/** One tool call of a subagent, for its timeline. */
+export type TimelineEntry = {
+  id: string
+  at: number
+  tool: string
+  /** What it acted on (a file, a command, a pattern), masked. */
+  target: string
+  status: 'running' | 'ok' | 'error' | 'held'
+}
+
+/** Everything the detail view shows about one subagent. Texts are masked and capped. */
+export type AgentDetail = {
+  id: string
+  /** The brief it was given. */
+  prompt: string
+  name?: string
+  cwd?: string
+  permissionMode?: string
+  isBackground: boolean
+  isFork: boolean
+  requestedModel?: string
+  parentModel: string
+  parentAgentId?: string
+  teammateId?: string
+  effort?: string
+  usage: { input: number; output: number; cacheRead: number; cacheWrite: number }
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number }
+  /** The last request's size: what it held in context. */
+  lastContext: number
+  timeline: TimelineEntry[]
+  toolCounts: Record<string, number>
+  errors: number
+  holds: number
+  filesRead: string[]
+  filesChanged: string[]
+  commands: string[]
+  /** The newest text it wrote while running. */
+  lastMessage: string
+  /** Its answer when it ended. */
+  finalReport: string
+  endReason?: string
+  lastActivityAt: number
+}
+
 /** The agents panel's own state. */
 export type AgentsUi = {
+  /** The subagent whose details are shown, or none for the list. */
+  selected?: string
   isCompact: boolean
   /** The batch the panel last opened itself for, so a close sticks for that prompt. */
   autoOpenedBatch: number
@@ -106,6 +152,8 @@ declare module 'claude-code' {
       /** Counts main prompts, so the bar knows which subagents are this prompt's. */
       batch: number
       agentsUi: AgentsUi
+      /** Per subagent, by its run id. */
+      details: StateFamily<AgentDetail>
     }
   }
 }

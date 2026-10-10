@@ -9,7 +9,7 @@
 
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentRun, AgentsUi, HeldRecord, HoldOutcome, HoldView, Replay, ReplayStep } from '../types'
+import type { AgentDetail, AgentRun, AgentsUi, HeldRecord, HoldOutcome, HoldView, Replay, ReplayStep } from '../types'
 import {
   AGENTS_PANE,
   activityOf,
@@ -19,6 +19,7 @@ import {
   barRuns,
   budgetOf,
   costOf,
+  costParts,
   drawAgents,
   drawAgentsBand,
   fmtUsd,
@@ -27,6 +28,7 @@ import {
 } from './agents'
 import type { AgentsConfig, Usage } from './agents'
 import { inspectBlast, looksDestructive, merge } from './blast'
+import { drawAgentDetail, newDetail, onFinish, onStep, onToolEnd, onToolStart } from './detail'
 import { applyEdits, buildStep, relPath } from './diff'
 import { configOf, inspectGuard, looksRisky } from './guard'
 import type { Finding, GuardConfig, Io } from './guard'
@@ -43,6 +45,7 @@ const REPLAY = { plugin: 'code-buddy', key: 'replay' } as const
 const AGENTS = { plugin: 'code-buddy', key: 'agents' } as const
 const BATCH = { plugin: 'code-buddy', key: 'batch' } as const
 const AGENTS_UI = { plugin: 'code-buddy', key: 'agentsUi' } as const
+const DETAILS = { plugin: 'code-buddy', key: 'details' } as const
 const UI_DEFAULT: AgentsUi = { isCompact: false, autoOpenedBatch: -1, budgetAlertedAt: 0 }
 
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
@@ -291,6 +294,56 @@ async function noteActivity($: EngineInterface, agentId: string, activity: strin
   await writeAgents($, list => list.map(a => (a.agentId === agentId && a.status === 'running' ? { ...a, activity, tools: (a.tools ?? 0) + 1 } : a)))
 }
 
+/** Changes one subagent's detail record, again on a lost race; nothing when it has none. */
+async function writeDetail($: EngineInterface, id: string, change: (d: AgentDetail) => AgentDetail): Promise<void> {
+  for (let tries = 0; tries < 5; tries += 1) {
+    const cur = await $.state.get({ ...DETAILS, id })
+    if (!cur.value) return
+    const done = await $.state.set({ ...DETAILS, id }, change(cur.value), { ifVersion: cur.version })
+    if (done.isSet) return
+  }
+}
+
+let entrySerial = 0
+
+/** A subagent's tool call starts: its timeline entry. Returns the entry's id ('' when not recorded). */
+async function startDetailEntry($: EngineInterface, agentId: string, input: Record<string, unknown>): Promise<string> {
+  try {
+    const at = await $.clock.now()
+    entrySerial += 1
+    const id = `${at}-${entrySerial}`
+    const cwd = await $.session.cwd()
+    await writeDetail($, agentId, d => onToolStart(d, input, cwd, id, at))
+    return id
+  } catch {
+    return ''
+  }
+}
+
+/** It ended: ok, an error, or held by Code Buddy. */
+async function endDetailEntry($: EngineInterface, agentId: string, input: Record<string, unknown>, entryId: string, ran: { deny?: string; isError?: boolean }): Promise<void> {
+  try {
+    const status = ran.deny !== undefined ? (ran.deny.startsWith('Code Buddy') ? 'held' : 'error') : ran.isError === true ? 'error' : 'ok'
+    const at = await $.clock.now()
+    const cwd = await $.session.cwd()
+    await writeDetail($, agentId, d => onToolEnd(d, input, cwd, entryId, status, at))
+  } catch {
+    // details must never fail a call
+  }
+}
+
+/** Shows one subagent's details in the panel, or the list again (undefined). */
+async function selectAgent($: EngineInterface, id: string | undefined): Promise<void> {
+  const ui = await readUi($)
+  await $.state.set(AGENTS_UI, { ...ui, selected: id })
+  if (id !== undefined && (await $.ui.panes()).some(p => p.id === AGENTS_PANE)) await $.ui.open(agentsPaneArgs(34))
+}
+
+async function copyText($: EngineInterface, text: string, surface: 'terminal' | 'desktop' | 'mobile' | 'vscode'): Promise<void> {
+  const done = await $.ui.copy({ text, surface })
+  $.ui.toast(done.isCopied ? 'Code Buddy: copied' : 'Code Buddy: could not copy here')
+}
+
 /** One toast when the session's subagents pass the budget (again only if the budget changes). */
 async function checkBudget($: EngineInterface, budget: number): Promise<void> {
   if (budget <= 0) return
@@ -458,6 +511,9 @@ export const register: Register = (on, options) => {
         // showing activity must never stop a call
       }
     }
+    const agentId = e.agentId
+    const entryId = agentId !== undefined ? await startDetailEntry($, agentId, input) : ''
+    const result = await (async () => {
     const found = await inspect($, input, cfg)
     if (found !== null) {
       const outcome = await hold($, next.signal, String(e.tool), found, e.agentId !== undefined)
@@ -483,6 +539,9 @@ export const register: Register = (on, options) => {
       }
     }
     return ran
+    })()
+    if (agentId !== undefined && entryId) await endDetailEntry($, agentId, input, entryId, result)
+    return result
   }).catch(($, e, next) =>
     next.called
       ? next(e)
@@ -512,6 +571,25 @@ export const register: Register = (on, options) => {
         batch,
       }
       await writeAgents($, list => [...list.filter(a => a.id !== run.id), run].slice(-200))
+      await $.state.set(
+        { ...DETAILS, id: run.id },
+        newDetail(
+          {
+            id: run.id,
+            prompt: e.prompt,
+            name: e.name,
+            cwd: e.cwd,
+            permissionMode: e.permissionMode,
+            background: e.background,
+            fork: e.fork,
+            model: e.model,
+            parentModel: e.parentModel,
+            parentAgentId: e.parentAgentId,
+            teammateId: started.teammateId,
+          },
+          at,
+        ),
+      )
       if (acfg.autoOpen) await maybeAutoOpen($, batch)
     } catch {
       // tracking must never stop a subagent
@@ -524,7 +602,11 @@ export const register: Register = (on, options) => {
     const result = yield* next(e)
     if (e.agentId !== undefined && result.usage) {
       try {
-        await addUsage($, e.agentId, result.usage.model || e.model, result.usage)
+        const model = result.usage.model || e.model
+        await addUsage($, e.agentId, model, result.usage)
+        const usage = result.usage
+        const at = await $.clock.now()
+        await writeDetail($, e.agentId, d => onStep(d, usage, costParts(model, usage), typeof e.effort === 'string' ? e.effort : undefined, result.answer, at))
         await checkBudget($, acfg.budget)
       } catch {
         // nor slow one down
@@ -547,6 +629,9 @@ export const register: Register = (on, options) => {
     const done = await next(e)
     if (e.agentId !== undefined) {
       await finishAgent($, e.agentId, e.reason, e.usage)
+      const at = await $.clock.now()
+      const agentId = e.agentId
+      await writeDetail($, agentId, d => onFinish(d, e.answer, e.reason, at))
       await checkBudget($, acfg.budget)
       return done
     }
@@ -572,8 +657,20 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: 'code-buddy-agents' }, async ($, e) => {
     const ui = $.ui.resolve(e)
     const list = (await $.state.get(AGENTS)).value ?? []
-    const view = { isCompact: (await readUi($)).isCompact, budget: acfg.budget }
-    return drawAgents(ui, e.surface, list, await $.clock.now(), e.props.bodyColumns, view, { toggleCompact: () => void toggleCompact($) })
+    const agentsUi = await readUi($)
+    const chosen = agentsUi.selected === undefined ? undefined : list.find(a => a.id === agentsUi.selected)
+    if (chosen !== undefined) {
+      const detail = (await $.state.get({ ...DETAILS, id: chosen.id })).value
+      return drawAgentDetail(ui, e.surface, chosen, detail ?? undefined, await $.clock.now(), e.props.bodyColumns, {
+        back: () => void selectAgent($, undefined),
+        copy: text => void copyText($, text, e.surface),
+      })
+    }
+    const view = { isCompact: agentsUi.isCompact, budget: acfg.budget }
+    return drawAgents(ui, e.surface, list, await $.clock.now(), e.props.bodyColumns, view, {
+      toggleCompact: () => void toggleCompact($),
+      select: id => void selectAgent($, id),
+    })
   })
 
   on('ui.render', { component: 'Pane', requestId: 'code-buddy-hold' }, async ($, e) => {

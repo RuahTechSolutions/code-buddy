@@ -86,6 +86,17 @@ export function costOf(model: string, u: Usage): number {
   return ((u.input_tokens || 0) * i + (u.output_tokens || 0) * o + (u.cache_read_input_tokens || 0) * r + (u.cache_creation_input_tokens || 0) * w) / 1e6
 }
 
+/** The cost of one request by kind of token. */
+export function costParts(model: string, u: Usage): { input: number; output: number; cacheRead: number; cacheWrite: number } {
+  const [i, o, r, w] = priceOf(model)
+  return {
+    input: ((u.input_tokens || 0) * i) / 1e6,
+    output: ((u.output_tokens || 0) * o) / 1e6,
+    cacheRead: ((u.cache_read_input_tokens || 0) * r) / 1e6,
+    cacheWrite: ((u.cache_creation_input_tokens || 0) * w) / 1e6,
+  }
+}
+
 export const tokensOf = (u: Usage): number =>
   (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0)
 
@@ -175,7 +186,7 @@ const rowOf = (a: AgentRun, now: number): AgentRowView => ({
 })
 
 export type AgentsView = { isCompact: boolean; budget: number }
-export type AgentsActions = { toggleCompact: () => void }
+export type AgentsActions = { toggleCompact: () => void; select: (id: string) => void }
 
 /** The side panel: summary, then running and finished subagents, full or compact. */
 export function drawAgents(ui: Ui, surface: Surface, list: AgentRun[], now: number, columns: number, view: AgentsView, act: AgentsActions) {
@@ -210,10 +221,16 @@ export function drawAgents(ui: Ui, surface: Surface, list: AgentRun[], now: numb
       items.map(a => {
         const r = rowOf(a, now)
         const alt = `${r.title}: ${STATUS_WORD[a.status]}, ${r.type}, ${r.model}, ${r.elapsed}, ${r.tokens}, ${r.cost}${r.activity ? `, now ${r.activity}` : ''}`
-        return view.isCompact ? (
-          <Svg key={a.id} source={compactAgentRowSvg(W, r)} alt={alt} width={W} height={COMPACT_ROW_H} />
-        ) : (
-          <Svg key={a.id} source={agentRowSvg(W, r)} alt={alt} width={W} height={agentRowHeight(r)} />
+        const details = <Button key={`d-${a.id}`} label={`Details ›`} plain onPress={() => act.select(a.id)} />
+        return (
+          <Box key={`r-${a.id}`} flexDirection="column">
+            {view.isCompact ? (
+              <Svg key={a.id} source={compactAgentRowSvg(W, r)} alt={alt} width={W} height={COMPACT_ROW_H} />
+            ) : (
+              <Svg key={a.id} source={agentRowSvg(W, r)} alt={alt} width={W} height={agentRowHeight(r, W)} />
+            )}
+            {details}
+          </Box>
         )
       })
     return (
@@ -239,14 +256,18 @@ export function drawAgents(ui: Ui, surface: Surface, list: AgentRun[], now: numb
   const barW = Math.max(8, Math.min(24, columns - 40))
   const row = (a: AgentRun) => {
     const r = rowOf(a, now)
+    const details = <Button key={`d-${a.id}`} label="Details ›" plain onPress={() => act.select(a.id)} />
     if (view.isCompact) {
       return (
-        <Text key={a.id} wrap="truncate-end">
+        <Box key={a.id} flexDirection="row" gap={1}>
+        <Text wrap="truncate-end">
           <Text color={STATUS_COLOR[a.status]} bold>{`${STATUS_GLYPH[a.status]} `}</Text>
           <Text bold>{r.title}</Text>
           <Text dimColor>{`  ${r.model} · ${r.elapsed} · ${r.cost}`}</Text>
           {r.activity ? <Text color={BRAND.sky}>{`  ▸ ${r.activity}`}</Text> : null}
         </Text>
+        {details}
+        </Box>
       )
     }
     return (
@@ -262,6 +283,7 @@ export function drawAgents(ui: Ui, surface: Surface, list: AgentRun[], now: numb
             <Text dimColor>{`  ${r.progress}`}</Text>
           </Text>
         ) : null}
+        {details}
       </Box>
     )
   }

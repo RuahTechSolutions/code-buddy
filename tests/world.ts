@@ -24,6 +24,8 @@ export type World = {
   openArgs: Record<string, unknown>[]
   closed: string[]
   toasts: string[]
+  /** Texts put on the clipboard. */
+  copied: string[]
   ran: string[]
   /** What each tool that ran was handed, after every plugin hook. */
   inputs: Record<string, unknown>[]
@@ -39,6 +41,7 @@ export function world(on: On, opts: WorldOptions = {}): World {
     openArgs: [],
     closed: [],
     toasts: [],
+    copied: [],
     ran: [],
     inputs: [],
     sleeps: () => sleeps,
@@ -87,6 +90,10 @@ export function world(on: On, opts: WorldOptions = {}): World {
     return { value: undefined }
   })
   on('ui.invalidate', () => ({ value: undefined }))
+  on('ui.copy', ($, e) => {
+    w.copied.push(e.text)
+    return { value: { isCopied: true as const } }
+  })
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   // The tool itself: a call that gets through "runs".
   on('tool.call', ($, e) => {

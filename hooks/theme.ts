@@ -369,22 +369,34 @@ ${tileSvg}`,
   )
 }
 
-/** A full row is 54 px, 72 with a running subagent's activity line. */
-export const agentRowHeight = (a: AgentRowView): number => (a.status === 'running' && a.activity ? 72 : 54)
+/** Below this width a row stacks its stats under the model instead of beside it. */
+const NARROW = 520
+
+/** A row's height: 54 px (72 narrow), plus a line for a running subagent's activity. */
+export const agentRowHeight = (a: AgentRowView, W = 640): number => {
+  const live = a.status === 'running' && !!a.activity
+  return W < NARROW ? (live ? 90 : 72) : live ? 72 : 54
+}
 
 /** One subagent: status, description, type and model, elapsed, tokens, cost, and what it is doing now. */
 export function agentRowSvg(W: number, a: AgentRowView): string {
-  const H = agentRowHeight(a)
-  const sw = textWidth(`${a.tokens} · ${a.cost}`, 11.5, true) + 4
-  const textW = W - 40 - sw - 16
-  const chip = fit(a.type, 10.5, 140)
+  const H = agentRowHeight(a, W)
+  const narrow = W < NARROW
+  const stats = `${a.tokens} · ${a.cost}`
+  const statsW = textWidth(stats, 11.5, true) + 4
+  const elapsedW = textWidth(a.elapsed, 11.5, true) + 12
+  const chip = fit(a.type, 10.5, Math.min(140, W * 0.4))
   const cw = Math.round(textWidth(chip, 10.5) + 14)
+  const modelW = Math.max(40, W - 40 - cw - 8 - (narrow ? 0 : statsW + 12))
   const live = a.status === 'running' && a.activity
   const activity = live
     ? `<path d="M40 ${H - 22}l5 3.5-5 3.5z" fill="${BRAND.sky}"/>
-<text x="51" y="${H - 14.5}" font-family="${MONO}" font-size="11.5" fill="${BRAND.sky}">${xml(fit(a.activity ?? '', 11.5, W - 51 - textWidth(a.progress ?? '', 11) - 16, true))}</text>
-<text class="m" x="${W}" y="${H - 14.5}" text-anchor="end" font-family="${FONT}" font-size="11">${xml(a.progress ?? '')}</text>`
+<text x="51" y="${H - 14.5}" font-family="${MONO}" font-size="11.5" fill="${BRAND.sky}">${xml(fit(a.activity ?? '', 11.5, W - 51 - (narrow ? 0 : textWidth(a.progress ?? '', 11) + 16), true))}</text>
+${narrow ? '' : `<text class="m" x="${W}" y="${H - 14.5}" text-anchor="end" font-family="${FONT}" font-size="11">${xml(a.progress ?? '')}</text>`}`
     : ''
+  const statsSvg = narrow
+    ? `<text class="m" x="40" y="60" font-family="${MONO}" font-size="11.5">${xml(fit(`${stats}${live && a.progress ? ` · ${a.progress}` : ''}`, 11.5, W - 40, true))}</text>`
+    : `<text class="m" x="${W}" y="41" text-anchor="end" font-family="${MONO}" font-size="11.5">${xml(stats)}</text>`
   const shimmer =
     a.status === 'running'
       ? `<rect class="pulse" x="40" y="${H - 4}" width="${W - 40}" height="2" rx="1" fill="${BRAND.sky}" fill-opacity=".6"/>`
@@ -393,12 +405,12 @@ export function agentRowSvg(W: number, a: AgentRowView): string {
     W,
     H,
     `${statusMark(16, 20, a.status)}
-<text class="t" x="40" y="20" font-family="${FONT}" font-size="13" font-weight="600">${xml(fit(a.title, 13, textW))}</text>
+<text class="t" x="40" y="20" font-family="${FONT}" font-size="13" font-weight="600">${xml(fit(a.title, 13, W - 40 - elapsedW))}</text>
 <rect class="chip" x="40" y="29" width="${cw}" height="16" rx="8"/>
 <text class="chipt" x="${40 + cw / 2}" y="40.5" text-anchor="middle" font-family="${FONT}" font-size="10.5" font-weight="600">${xml(chip)}</text>
-<text class="m" x="${40 + cw + 8}" y="41" font-family="${FONT}" font-size="11.5">${xml(fit(a.model, 11.5, Math.max(40, textW - cw - 8)))}</text>
+<text class="m" x="${40 + cw + 8}" y="41" font-family="${FONT}" font-size="11.5">${xml(fit(a.model, 11.5, modelW))}</text>
 <text class="t" x="${W}" y="20" text-anchor="end" font-family="${MONO}" font-size="11.5">${xml(a.elapsed)}</text>
-<text class="m" x="${W}" y="41" text-anchor="end" font-family="${MONO}" font-size="11.5">${xml(`${a.tokens} · ${a.cost}`)}</text>
+${statsSvg}
 ${activity}
 ${shimmer}`,
   )
@@ -424,4 +436,109 @@ ${middle ? `<text x="${mx}" y="${H / 2 + 4.5}" font-family="${MONO}" font-size="
 <text class="m" x="${W}" y="${H / 2 + 4.5}" text-anchor="end" font-family="${MONO}" font-size="11.5">${xml(right)}</text>
 <line class="ln" x1="24" y1="${H - 0.5}" x2="${W}" y2="${H - 0.5}"/>`,
   )
+}
+
+// ---- Agent details -------------------------------------------------------------
+
+/** Splits text into lines that fit `maxW`, at most `max` of them, the last cut with an ellipsis. */
+export function wrapLines(text: string, size: number, maxW: number, max: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean)
+  const lines: string[] = []
+  let line = ''
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word
+    if (textWidth(next, size) <= maxW) {
+      line = next
+      continue
+    }
+    if (line) lines.push(line)
+    line = textWidth(word, size) <= maxW ? word : fit(word, size, maxW)
+    if (lines.length === max) break
+  }
+  if (line && lines.length < max) lines.push(line)
+  if (lines.length === max && words.join(' ').length > lines.join(' ').length) {
+    lines[max - 1] = fit(`${lines[max - 1]} …`, size, maxW)
+  }
+  return lines
+}
+
+const STATUS_LABEL = { running: 'Running', done: 'Finished', failed: 'Failed', stopped: 'Stopped' } as const
+
+/** The detail view's card: status, elapsed, the full name over up to three lines, type · model · effort. */
+export function detailHeaderSvg(W: number, a: AgentRowView, meta: string): { source: string; height: number } {
+  const lines = wrapLines(a.title, 15, W - 32, 3)
+  const H = 70 + lines.length * 20
+  const label = STATUS_LABEL[a.status]
+  const pw = Math.round(textWidth(label, 11) + 26)
+  const pill = `<rect x="16" y="14" width="${pw}" height="20" rx="10" fill="${BRAND.white}" fill-opacity=".18"/>
+<circle ${a.status === 'running' ? 'class="pulse" ' : ''}cx="27" cy="24" r="3.5" fill="${a.status === 'running' ? BRAND.white : STATUS_COLOR[a.status]}"/>
+<text x="35" y="28" font-family="${FONT}" font-size="11" font-weight="700" fill="${BRAND.white}">${label}</text>`
+  const title = lines
+    .map((l, i) => `<text x="16" y="${58 + i * 20}" font-family="${FONT}" font-size="15" font-weight="600" fill="${BRAND.white}">${xml(l)}</text>`)
+    .join('')
+  return {
+    height: H,
+    source: svg(
+      W,
+      H,
+      `<clipPath id="cb-dcard"><rect x="0" y="0" width="${W}" height="${H}" rx="12"/></clipPath>
+<g clip-path="url(#cb-dcard)"><rect x="0" y="0" width="${W}" height="${H}" fill="url(#cb-brand)"/>
+${a.status === 'running' ? `<rect class="pulse" x="0" y="${H - 3}" width="${W}" height="3" fill="${BRAND.white}" fill-opacity=".5"/>` : ''}</g>
+${pill}
+<text x="${W - 16}" y="29" text-anchor="end" font-family="${MONO}" font-size="15" font-weight="600" fill="${BRAND.white}">${xml(a.elapsed)}</text>
+${title}
+<text x="16" y="${H - 14}" font-family="${FONT}" font-size="11.5" fill="${BRAND.white}" fill-opacity=".8">${xml(fit(meta, 11.5, W - 32))}</text>`,
+    ),
+  }
+}
+
+/** A grid of labelled numbers, two or three across. */
+export function statsGridSvg(W: number, stats: [string, string, string?][]): { source: string; height: number } {
+  const cols = W < 420 ? 2 : 3
+  const gap = 8
+  const tw = (W - gap * (cols - 1)) / cols
+  const TH = 52
+  const rows = Math.ceil(stats.length / cols)
+  const H = rows * TH + (rows - 1) * gap
+  const tiles = stats
+    .map(([k, v, sub], i) => {
+      const x = (i % cols) * (tw + gap)
+      const y = Math.floor(i / cols) * (TH + gap)
+      return `<rect class="chip" x="${x}" y="${y}" width="${tw}" height="${TH}" rx="10"/>
+<text class="chipt" x="${x + 10}" y="${y + 17}" font-family="${FONT}" font-size="10" font-weight="700" letter-spacing=".7">${xml(k.toUpperCase())}</text>
+<text class="t" x="${x + 10}" y="${y + 38}" font-family="${FONT}" font-size="15" font-weight="600" font-variant-numeric="tabular-nums">${xml(fit(v, 15, tw - 20 - (sub ? textWidth(sub, 10.5) + 6 : 0)))}</text>
+${sub ? `<text class="m" x="${x + tw - 10}" y="${y + 38}" text-anchor="end" font-family="${FONT}" font-size="10.5">${xml(sub)}</text>` : ''}`
+    })
+    .join('')
+  return { height: H, source: svg(W, H, tiles) }
+}
+
+const PART_COLORS = [BRAND.deep, BRAND.blue, BRAND.sky, BRAND.coral]
+
+/** Tokens by kind as one stacked bar, with a legend: tokens and cost of each. */
+export function tokenBreakdownSvg(W: number, parts: [string, string, string, number][]): { source: string; height: number } {
+  const total = parts.reduce((s, p) => s + p[3], 0) || 1
+  let x = 0
+  const bar = parts
+    .map(([, , , n], i) => {
+      const w = Math.round((W * n) / total)
+      const r = `<rect x="${x}" y="0" width="${Math.max(0, w)}" height="10" fill="${PART_COLORS[i % PART_COLORS.length]}"/>`
+      x += w
+      return r
+    })
+    .join('')
+  const legend = parts
+    .map(([label, tokens, cost], i) => {
+      const y = 30 + i * 20
+      return `<rect x="0" y="${y - 9}" width="10" height="10" rx="3" fill="${PART_COLORS[i % PART_COLORS.length]}"/>
+<text class="t" x="18" y="${y}" font-family="${FONT}" font-size="12">${xml(label)}</text>
+<text class="m" x="${W - 70}" y="${y}" text-anchor="end" font-family="${MONO}" font-size="11.5">${xml(tokens)}</text>
+<text class="t" x="${W}" y="${y}" text-anchor="end" font-family="${MONO}" font-size="11.5">${xml(cost)}</text>`
+    })
+    .join('')
+  const H = 30 + parts.length * 20 - 6
+  return {
+    height: H,
+    source: svg(W, H, `<clipPath id="cb-tbar"><rect x="0" y="0" width="${W}" height="10" rx="5"/></clipPath><g clip-path="url(#cb-tbar)"><rect class="chip" x="0" y="0" width="${W}" height="10"/>${bar}</g>${legend}`),
+  }
 }
