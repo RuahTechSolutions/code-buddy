@@ -50,6 +50,7 @@ export function world(on: On, opts: WorldOptions = {}): World {
   let sleeps = 0
   on('session.surfaces', () => ({ value: opts.surfaces ?? ['desktop'] }))
   on('session.cwd', () => ({ value: '/repo' }))
+  on('session.attach', ($, e) => ({ clientId: e.clientId }))
   on('clock.now', () => ({ value: opts.now ? opts.now() : 1_000 }))
   on('process.run', ($, e) => {
     const done = { stderr: '', isStdoutTruncated: false, isStderrTruncated: false }

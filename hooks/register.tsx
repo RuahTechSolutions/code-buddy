@@ -46,6 +46,7 @@ const AGENTS = { plugin: 'code-buddy', key: 'agents' } as const
 const BATCH = { plugin: 'code-buddy', key: 'batch' } as const
 const AGENTS_UI = { plugin: 'code-buddy', key: 'agentsUi' } as const
 const DETAILS = { plugin: 'code-buddy', key: 'details' } as const
+const SEEN = { plugin: 'code-buddy', key: 'seenSurface' } as const
 const UI_DEFAULT: AgentsUi = { isCompact: false, autoOpenedBatch: -1, budgetAlertedAt: 0 }
 
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
@@ -72,6 +73,18 @@ let serial = 0
 // drawn Code Buddy on (the desktop app attaches its window after the session starts).
 let isInteractive = false
 let hasDrawn = false
+// Whether `seenSurface` is already written, so the tick doesn't read it every second.
+let isSeenSaved = false
+
+/**
+ * Remembers in session state, which outlives a reload of this module, that a
+ * window has been attached: a hold then waits for an answer instead of refusing.
+ */
+async function markSeen($: EngineInterface): Promise<void> {
+  if (isSeenSaved) return
+  if ((await $.state.get(SEEN)).value !== true) await $.state.set(SEEN, true)
+  isSeenSaved = true
+}
 
 // ---- Engine access (every `$` call lives in this file) ----------------------
 
@@ -136,7 +149,9 @@ async function hold($: EngineInterface, signal: AbortSignal, tool: string, found
 
   // Nobody could ever answer (a -p run, an SDK session no surface ever drew): refuse at
   // once. A desktop window that is only detached for now gets the usual 10 minutes.
-  if ((await $.session.surfaces()).length === 0 && !isInteractive && !hasDrawn) {
+  const surfaces = await $.session.surfaces()
+  if (surfaces.length > 0 || hasDrawn) await markSeen($)
+  else if (!isInteractive && (await $.state.get(SEEN)).value !== true) {
     await record($, view, 'no-one', heldAt)
     return 'no-one'
   }
@@ -462,6 +477,7 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     isInteractive = e.isInteractive
+    if (e.isInteractive || e.surface !== null) await markSeen($)
     await $.command.register({
       name: 'code-buddy',
       description: 'Code Buddy: status and held calls; replay, agents or config',
@@ -470,6 +486,7 @@ export const register: Register = (on, options) => {
     // Running subagents' clocks tick once a second; quiet when none runs.
     $.clock.every(1000, () => {
       void (async () => {
+        if (hasDrawn && !isSeenSaved) await markSeen($)
         const list = (await $.state.get(AGENTS)).value ?? []
         if (list.some(a => a.status === 'running')) $.ui.invalidate('ui.render')
       })()
@@ -549,6 +566,17 @@ export const register: Register = (on, options) => {
         ? { deny: 'Code Buddy could not finish checking this call, and it looks risky, so it was refused. Do not retry it unless the user asks you to.' }
         : next(e),
   )
+
+  // A window joined the session: holds can be answered from now on, reloads included.
+  on('session.attach', async ($, e, next) => {
+    const attached = await next(e)
+    try {
+      await markSeen($)
+    } catch {
+      // the hold falls back to its own checks
+    }
+    return attached
+  })
 
   // Feature 4: every subagent, as it starts. Any Agent tool call, no companion skill.
   on('agent.spawn', async ($, e, next) => {

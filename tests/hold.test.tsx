@@ -117,6 +117,16 @@ describe('hold pane', () => {
     expect((await settle($, w, call)).deny).toContain('the user pressed Cancel')
   })
 
+  test('a window attached earlier still gets to answer after a reload, with none attached now', async ($, on) => {
+    const w = world(on, { surfaces: [] })
+    await $.session.attach({ surface: 'desktop', clientId: 'window-1' }) // remembered in session state
+    const call = $.tool.call({ tool: 'Bash', command: 'terraform apply' })
+    await until($, w, () => w.opened.length > 0)
+    const ui = await pane($, 'desktop')
+    await ui.press({ key: 'cancel' })
+    expect((await settle($, w, call)).deny).toContain('the user pressed Cancel')
+  })
+
   test('holds queue: one shows at a time', { options: OPTS }, async ($, on) => {
     const w = world(on)
     const first = $.tool.call({ tool: 'Bash', command: 'docker push ghcr.io/acme/api:1' })

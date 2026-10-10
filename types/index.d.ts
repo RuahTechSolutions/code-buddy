@@ -152,6 +152,8 @@ declare module 'claude-code' {
       /** Counts main prompts, so the bar knows which subagents are this prompt's. */
       batch: number
       agentsUi: AgentsUi
+      /** A window has been attached to this session, so holds wait for an answer (survives reloads). */
+      seenSurface: boolean
       /** Per subagent, by its run id. */
       details: StateFamily<AgentDetail>
     }

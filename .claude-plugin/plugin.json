@@ -1,7 +1,7 @@
 {
   "name": "code-buddy",
   "displayName": "Code Buddy",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Holds risky tool calls (production domains, live Stripe keys, protected-branch pushes, deploys, destructive commands) for your OK, replays each turn's edits, and tracks every subagent's progress, tokens and cost.",
   "author": {
     "name": "Ruah Tech Solutions",
