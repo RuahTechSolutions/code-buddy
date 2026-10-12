@@ -10,7 +10,7 @@ import type { EngineInterface } from 'claude-code'
 
 import type { HoldOutcome, HoldView } from '../types'
 import type { Finding } from './guard'
-import { BRAND, HEADER_H, chipsSvg, holdBandSvg, holdHeaderSvg, idleBandSvg, labelSvg, pxOf } from './theme'
+import { BRAND, HEADER_H, chipsSvg, holdBandSvg, holdHeaderSvg, idleBandSvg, idleBandWidth, labelSvg, pxOf } from './theme'
 
 export const HOLD_PANE = 'code-buddy-hold'
 export const HOLD_LIMIT_MS = 10 * 60 * 1000
@@ -200,16 +200,24 @@ export function drawHoldBand(ui: Ui, surface: Surface, view: HoldView, behind: n
 }
 
 /** The idle band: the brand badge, guard state, how many calls were held. */
-export function drawIdleBand(ui: Ui, surface: Surface, isOn: boolean, held: number, columns: number, overBudget = '') {
+export function drawIdleBand(ui: Ui, surface: Surface, isOn: boolean, held: number, columns: number, overBudget = '', paused: string[] = [], resume: () => void = () => {}) {
   const { Text } = ui
   const words = `Code Buddy · guard ${isOn ? 'on' : 'off'} · ${held} held`
   if (surface === 'desktop' && 'Svg' in ui) {
     const { Svg } = ui
-    const W = Math.min(pxOf(columns, 0, 200), overBudget ? 520 : 360)
-    return <Svg key="idle" source={idleBandSvg(W, isOn, held, overBudget)} alt={overBudget ? `${words} · ${overBudget}` : words} width={W} height={24} />
+    const W = Math.min(pxOf(columns, paused.length ? 100 : 0, 200), idleBandWidth(held, overBudget, paused))
+    const alt = [words, overBudget, ...paused.map(p => `paused: ${p}`)].filter(Boolean).join(' · ')
+    const drawing = <Svg key="idle" source={idleBandSvg(W, isOn, held, overBudget, paused)} alt={alt} width={W} height={24} />
+    if (paused.length === 0) return drawing
+    return (
+      <ui.Box flexDirection="row" alignItems="center" gap={1}>
+        {drawing}
+        <ui.Button key="resume-all" label="Resume" hotkey="r" variant="primary" onPress={resume} />
+      </ui.Box>
+    )
   }
-  return (
-    <Text wrap="truncate-end">
+  const line = (
+    <Text key="idle" wrap="truncate-end">
       <Text backgroundColor={BRAND.royal} color={BRAND.white} bold>
         {' ≋ Code Buddy '}
       </Text>
@@ -218,6 +226,16 @@ export function drawIdleBand(ui: Ui, surface: Surface, isOn: boolean, held: numb
       </Text>
       <Text dimColor>{`  ·  ${held} held`}</Text>
       {overBudget ? <Text color={BRAND.coral} bold>{`  ·  ${overBudget}`}</Text> : null}
+      {paused.map(p => (
+        <Text key={`p-${p}`} color={BRAND.coral} bold>{`  ·  ⏸ ${p}`}</Text>
+      ))}
     </Text>
+  )
+  if (paused.length === 0) return line
+  return (
+    <ui.Box flexDirection="row" gap={1}>
+      {line}
+      <ui.Button key="resume-all" label="Resume" hotkey="r" variant="primary" onPress={resume} />
+    </ui.Box>
   )
 }

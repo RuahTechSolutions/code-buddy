@@ -1,7 +1,7 @@
 {
   "name": "code-buddy",
   "displayName": "Code Buddy",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Holds risky tool calls (production domains, live Stripe keys, protected-branch pushes, deploys, destructive commands) for your OK, replays each turn's edits, and tracks every subagent's progress, tokens and cost.",
   "author": {
     "name": "Ruah Tech Solutions",
@@ -10,7 +10,17 @@
   "homepage": "https://github.com/RuahTechSolutions/code-buddy",
   "repository": "https://github.com/RuahTechSolutions/code-buddy",
   "license": "Apache-2.0",
-  "keywords": ["mods", "safety", "guard", "git", "deploy", "replay", "diff", "subagents", "cost"],
+  "keywords": [
+    "mods",
+    "safety",
+    "guard",
+    "git",
+    "deploy",
+    "replay",
+    "diff",
+    "subagents",
+    "cost"
+  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "productionDomains": {
@@ -33,8 +43,32 @@
     },
     "guard": {
       "type": "boolean",
-      "title": "Guard",
-      "description": "On holds risky calls; off lets everything through (replay and agents keep working).",
+      "title": "Holds (master switch)",
+      "description": "Off turns off both hold features, the staging guard and blast radius. Replay and the agents panel keep working.",
+      "default": true
+    },
+    "stagingGuard": {
+      "type": "boolean",
+      "title": "Staging guard",
+      "description": "Holds calls to production domains, live Stripe keys, protected-branch pushes and merges, and deploys.",
+      "default": true
+    },
+    "blastRadius": {
+      "type": "boolean",
+      "title": "Blast radius",
+      "description": "Holds destructive shell commands and shows what they would delete or change.",
+      "default": true
+    },
+    "replay": {
+      "type": "boolean",
+      "title": "Replay",
+      "description": "Records each turn's file edits for /code-buddy replay.",
+      "default": true
+    },
+    "agentsPanel": {
+      "type": "boolean",
+      "title": "Agents panel",
+      "description": "Tracks subagents in the band and the agents panel.",
       "default": true
     },
     "agentBudgetUsd": {

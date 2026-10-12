@@ -9,7 +9,7 @@
 
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentDetail, AgentRun, AgentsUi, HeldRecord, HoldOutcome, HoldView, Replay, ReplayStep } from '../types'
+import type { AgentDetail, AgentRun, AgentsUi, HeldRecord, Pauses, HoldOutcome, HoldView, Replay, ReplayStep } from '../types'
 import {
   AGENTS_PANE,
   activityOf,
@@ -30,7 +30,11 @@ import type { AgentsConfig, Usage } from './agents'
 import { inspectBlast, looksDestructive, merge } from './blast'
 import { drawAgentDetail, newDetail, onFinish, onStep, onToolEnd, onToolStart } from './detail'
 import { applyEdits, buildStep, relPath } from './diff'
-import { configOf, inspectGuard, looksRisky } from './guard'
+import { CONTROL_PANE, controlRows, drawControl } from './control'
+import type { SettingField } from './control'
+import { FEATURES, durText, enabledOf, expire, featureOf, isPaused, leftText, nameOf, parseDuration } from './features'
+import type { Feature } from './features'
+import { configOf, inspectGuard, looksRisky, parseList } from './guard'
 import type { Finding, GuardConfig, Io } from './guard'
 import { HOLD_LIMIT_MS, HOLD_PANE, OUTCOME_LABEL, POLL_SECONDS, drawHold, drawHoldBand, drawIdleBand, paneRows, pending, refusal } from './hold'
 import type { Pending } from './hold'
@@ -47,6 +51,7 @@ const BATCH = { plugin: 'code-buddy', key: 'batch' } as const
 const AGENTS_UI = { plugin: 'code-buddy', key: 'agentsUi' } as const
 const DETAILS = { plugin: 'code-buddy', key: 'details' } as const
 const SEEN = { plugin: 'code-buddy', key: 'seenSurface' } as const
+const PAUSES = { plugin: 'code-buddy', key: 'pauses' } as const
 const UI_DEFAULT: AgentsUi = { isCompact: false, autoOpenedBatch: -1, budgetAlertedAt: 0 }
 
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
@@ -59,6 +64,10 @@ const CONFIG_FIELDS: Record<string, { key: string; label: string }> = {
   guard: { key: 'guard', label: 'Guard' },
   budget: { key: 'agentBudgetUsd', label: 'Subagent budget' },
   autoopen: { key: 'autoOpenAgents', label: 'Auto-open agents panel' },
+  stagingguard: { key: 'stagingGuard', label: 'Staging guard' },
+  blast: { key: 'blastRadius', label: 'Blast radius' },
+  replay: { key: 'replay', label: 'Replay' },
+  agents: { key: 'agentsPanel', label: 'Agents panel' },
 }
 
 const ago = (ms: number): string => {
@@ -395,20 +404,140 @@ async function finishAgent($: EngineInterface, agentId: string, reason: string, 
   )
 }
 
+// ---- Feature 5: pausing features and the control panel ---------------------------
+
+let version = ''
+
+async function readVersion($: EngineInterface): Promise<string> {
+  try {
+    const text = await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)
+    return String((JSON.parse(text) as { version?: unknown }).version ?? '')
+  } catch {
+    return ''
+  }
+}
+
+async function pausesOf($: EngineInterface): Promise<Pauses> {
+  return (await $.state.get(PAUSES)).value ?? {}
+}
+
+/** On in the settings and not paused right now. */
+async function isActive($: EngineInterface, enabled: Record<Feature, boolean>, f: Feature): Promise<boolean> {
+  if (!enabled[f]) return false
+  const p = await pausesOf($)
+  return p[f] === undefined || !isPaused(p, f, await $.clock.now())
+}
+
+async function writePauses($: EngineInterface, change: (p: Pauses) => Pauses): Promise<void> {
+  for (let tries = 0; tries < 5; tries += 1) {
+    const cur = await $.state.get(PAUSES)
+    const done = await $.state.set(PAUSES, change(cur.value ?? {}), { ifVersion: cur.version })
+    if (done.isSet) return
+  }
+}
+
+/** Pauses one feature, or every one that is on, for `ms` (0: until resumed). */
+async function pauseFeature($: EngineInterface, f: Feature | 'all', ms: number, enabled: Record<Feature, boolean>): Promise<string> {
+  const ids = f === 'all' ? FEATURES.map(x => x.id).filter(id => enabled[id]) : [f]
+  const until = ms > 0 ? (await $.clock.now()) + ms : 0
+  await writePauses($, p => {
+    const next: Pauses = { ...p }
+    for (const id of ids) next[id] = until
+    return next
+  })
+  $.ui.invalidate('ui.render')
+  const what = f === 'all' ? 'All features' : nameOf(f)
+  const text = `Code Buddy: ${what} paused ${ms > 0 ? `for ${durText(ms)}` : 'until you resume'}. /code-buddy resume${f === 'all' ? '' : ` ${f}`} brings ${f === 'all' ? 'them' : 'it'} back.`
+  $.ui.toast(text)
+  return text
+}
+
+async function resumeFeature($: EngineInterface, f: Feature | 'all'): Promise<string> {
+  const before = await pausesOf($)
+  const ids = f === 'all' ? (Object.keys(before) as Feature[]) : [f]
+  await writePauses($, p => {
+    const next: Pauses = { ...p }
+    for (const id of ids) delete next[id]
+    return next
+  })
+  $.ui.invalidate('ui.render')
+  const was = ids.filter(id => before[id] !== undefined)
+  const text = was.length ? `Code Buddy: ${was.map(nameOf).join(', ')} resumed.` : `Code Buddy: ${f === 'all' ? 'nothing was' : `${nameOf(f)} wasn't`} paused.`
+  $.ui.toast(text)
+  return text
+}
+
+/** Turns a feature on or off in the settings, for every session. */
+async function setFeatureOn($: EngineInterface, f: Feature, on: boolean, options: Record<string, unknown>): Promise<string> {
+  const key = FEATURES.find(x => x.id === f)?.key
+  if (!key) return ''
+  if (on && (f === 'guard' || f === 'blast') && options.guard === false) await $.config.set({ key: 'code-buddy.guard', value: true })
+  const done = await $.config.set({ key: `code-buddy.${key}`, value: on })
+  const text = 'deny' in done && done.deny !== undefined ? `Couldn't change ${nameOf(f)}: ${done.deny}` : `Code Buddy: ${nameOf(f)} turned ${on ? 'on' : 'off'} for every session.`
+  $.ui.toast(text)
+  return text
+}
+
+const SETTING_KEYS: Record<SettingField, { key: string; label: string }> = {
+  production: { key: 'productionDomains', label: 'Production domains' },
+  staging: { key: 'stagingDomains', label: 'Staging domains' },
+  branch: { key: 'protectedBranch', label: 'Protected branch' },
+  budget: { key: 'agentBudgetUsd', label: 'Subagent budget' },
+}
+
+/** Saves one field of the control panel's settings. */
+async function saveSetting($: EngineInterface, field: SettingField, text: string): Promise<void> {
+  let value: string | number
+  let shown: string
+  if (field === 'budget') {
+    const budget = parseBudget(text.trim() || 'off')
+    if (budget === null) {
+      $.ui.toast('Code Buddy: the budget takes an amount in dollars, like 2 or 2.50, or off.')
+      return
+    }
+    value = budget
+    shown = budget > 0 ? fmtUsd(budget) : 'off'
+  } else {
+    value = parseList(text).join(', ')
+    shown = value || '(none)'
+    if (field === 'branch' && !value) {
+      $.ui.toast("Code Buddy: the protected branch can't be empty.")
+      return
+    }
+  }
+  const { key, label } = SETTING_KEYS[field]
+  const done = await $.config.set({ key: `code-buddy.${key}`, value })
+  $.ui.toast('deny' in done && done.deny !== undefined ? `Code Buddy: couldn't save ${label}: ${done.deny}` : `Code Buddy: ${label} set to ${shown}.`)
+}
+
+async function openControl($: EngineInterface): Promise<void> {
+  await $.ui.open({ id: CONTROL_PANE, title: 'Code Buddy', focus: true, rows: controlRows(), columns: 72 })
+}
+
 /** Everything the guard and blast radius hold this call for; null lets it through. */
-async function inspect($: EngineInterface, e: Record<string, unknown>, cfg: GuardConfig): Promise<Finding | null> {
-  if (!cfg.isOn) return null
+async function inspect($: EngineInterface, e: Record<string, unknown>, cfg: GuardConfig, enabled: Record<Feature, boolean>): Promise<Finding | null> {
+  const guardOn = await isActive($, enabled, 'guard')
+  const blastOn = await isActive($, enabled, 'blast')
+  if (!guardOn && !blastOn) return null
   const io = ioOf($)
-  return merge(await inspectGuard(io, e, cfg), await inspectBlast(io, e))
+  return merge(guardOn ? await inspectGuard(io, e, cfg) : null, blastOn ? await inspectBlast(io, e) : null)
+}
+
+/** "Staging guard on · Blast radius paused (28m left) · Replay on · Agents panel off" */
+async function featuresLine($: EngineInterface, enabled: Record<Feature, boolean>): Promise<string> {
+  const p = await pausesOf($)
+  const now = await $.clock.now()
+  return FEATURES.map(f => `${f.name} ${!enabled[f.id] ? 'off' : isPaused(p, f.id, now) ? `paused (${leftText(p, f.id, now)})` : 'on'}`).join(' · ')
 }
 
 // ---- /code-buddy -------------------------------------------------------------
 
-async function statusText($: EngineInterface, cfg: GuardConfig, acfg: AgentsConfig): Promise<string> {
+async function statusText($: EngineInterface, cfg: GuardConfig, acfg: AgentsConfig, enabled: Record<Feature, boolean>): Promise<string> {
   const log = await readLog($)
   const now = await $.clock.now()
   const lines = [
-    `Code Buddy · guard ${cfg.isOn ? 'on' : 'off'} · ${log.length} held this session`,
+    `Code Buddy · ${log.length} held this session`,
+    `  Features:   ${await featuresLine($, enabled)}`,
     `  Production: ${cfg.production.join(', ') || '(none)'}`,
     `  Staging:    ${cfg.staging.join(', ') || '(none)'} (production wins on overlap)`,
     `  Protected:  ${cfg.branches.join(', ')}`,
@@ -425,17 +554,21 @@ async function statusText($: EngineInterface, cfg: GuardConfig, acfg: AgentsConf
       lines.push(`      ${r.command.length > 160 ? `${r.command.slice(0, 159)}…` : r.command}`)
     }
   }
-  lines.push('', 'More: /code-buddy replay · /code-buddy agents · /code-buddy config')
+  lines.push('', 'More: /code-buddy control · pause · resume · replay · agents · config')
   return mask(lines.join('\n'))
 }
 
-function configText(cfg: GuardConfig, acfg: AgentsConfig): string {
+function configText(cfg: GuardConfig, acfg: AgentsConfig, enabled: Record<Feature, boolean>): string {
   return [
     'Code Buddy settings',
     `  production  ${cfg.production.join(', ') || '(none)'}`,
     `  staging     ${cfg.staging.join(', ') || '(none)'}`,
     `  branch      ${cfg.branches.join(', ')}`,
-    `  guard       ${cfg.isOn ? 'on' : 'off'}`,
+    `  guard       ${cfg.isOn ? 'on' : 'off'}   (master switch for both hold features)`,
+    `  stagingguard ${enabled.guard ? 'on' : 'off'}`,
+    `  blast       ${enabled.blast ? 'on' : 'off'}`,
+    `  replay      ${enabled.replay ? 'on' : 'off'}`,
+    `  agents      ${enabled.agents ? 'on' : 'off'}`,
     `  budget      ${acfg.budget > 0 ? fmtUsd(acfg.budget) : 'off'}   (estimated subagent spend per session)`,
     `  autoopen    ${acfg.autoOpen ? 'on' : 'off'}   (agents panel opens when a 2nd subagent starts)`,
     '',
@@ -448,17 +581,20 @@ function configText(cfg: GuardConfig, acfg: AgentsConfig): string {
     '  /code-buddy config guard off',
     '  /code-buddy config budget 2.50',
     '  /code-buddy config autoopen off',
+    '  /code-buddy config blast off      (off in every session; /code-buddy pause blast 30m pauses it for now)',
+    '',
+    'Or open the control panel: /code-buddy control',
   ].join('\n')
 }
 
-async function setConfig($: EngineInterface, args: string, cfg: GuardConfig, acfg: AgentsConfig): Promise<string> {
+async function setConfig($: EngineInterface, args: string, cfg: GuardConfig, acfg: AgentsConfig, enabled: Record<Feature, boolean>): Promise<string> {
   const [name = '', ...rest] = args.trim().split(/\s+/)
-  if (!name) return configText(cfg, acfg)
+  if (!name) return configText(cfg, acfg, enabled)
   const field = CONFIG_FIELDS[name.toLowerCase()]
   if (!field) return `Unknown setting "${name}". Settings: ${Object.keys(CONFIG_FIELDS).join(', ')}.`
   const text = rest.join(' ').trim()
   if (!text) return `Give a value: /code-buddy config ${name} <value>`
-  const isSwitch = field.key === 'guard' || field.key === 'autoOpenAgents'
+  const isSwitch = ['guard', 'autoOpenAgents', 'stagingGuard', 'blastRadius', 'replay', 'agentsPanel'].includes(field.key)
   if (isSwitch && text !== 'on' && text !== 'off') return `${field.label} takes on or off.`
   const budget = field.key === 'agentBudgetUsd' ? parseBudget(text) : 0
   if (budget === null) return 'Budget takes an amount in dollars, like 2 or 2.50, or off.'
@@ -473,20 +609,32 @@ async function setConfig($: EngineInterface, args: string, cfg: GuardConfig, acf
 export const register: Register = (on, options) => {
   const cfg = configOf(options as Record<string, unknown>)
   const acfg = agentsConfigOf(options as Record<string, unknown>)
+  const enabled = enabledOf(options as Record<string, unknown>)
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     isInteractive = e.isInteractive
     if (e.isInteractive || e.surface !== null) await markSeen($)
+    version = await readVersion($)
     await $.command.register({
       name: 'code-buddy',
       description: 'Code Buddy: status and held calls; replay, agents or config',
-      argumentHint: '[replay | agents | config]',
+      argumentHint: '[control | pause <feature> [30m] | resume | replay | agents | config]',
     })
     // Running subagents' clocks tick once a second; quiet when none runs.
     $.clock.every(1000, () => {
       void (async () => {
         if (hasDrawn && !isSeenSaved) await markSeen($)
+        // Timed pauses end by themselves; the band counts them down.
+        const paused = (await $.state.get(PAUSES)).value ?? {}
+        if (Object.keys(paused).length > 0) {
+          const { pauses, ended } = expire(paused, await $.clock.now())
+          if (ended.length > 0) {
+            await $.state.set(PAUSES, pauses)
+            $.ui.toast(`Code Buddy: ${ended.map(nameOf).join(', ')} resumed (the pause ended).`)
+          }
+          if (Object.values(paused).some(until => until !== 0)) $.ui.invalidate('ui.render')
+        }
         const list = (await $.state.get(AGENTS)).value ?? []
         if (list.some(a => a.status === 'running')) $.ui.invalidate('ui.render')
       })()
@@ -499,9 +647,9 @@ export const register: Register = (on, options) => {
     switch (sub.toLowerCase()) {
       case '':
       case 'status':
-        return { text: await statusText($, cfg, acfg) }
+        return { text: await statusText($, cfg, acfg, enabled) }
       case 'config':
-        return { text: await setConfig($, rest.join(' '), cfg, acfg) }
+        return { text: await setConfig($, rest.join(' '), cfg, acfg, enabled) }
       case 'replay': {
         const r = (await $.state.get(REPLAY)).value
         if (!(await openReplay($)) || !r) return { text: 'Code Buddy · replay: no edits recorded yet. It fills after a turn that edits files.' }
@@ -512,8 +660,30 @@ export const register: Register = (on, options) => {
         const n = ((await $.state.get(AGENTS)).value ?? []).length
         return { text: isOpen ? `Code Buddy · agents panel opened (${n} ${n === 1 ? 'subagent' : 'subagents'} this session).` : 'Code Buddy · agents panel closed.' }
       }
+      case 'control':
+      case 'settings':
+      case 'features':
+        await openControl($)
+        return { text: 'Code Buddy · control panel opened.' }
+      case 'pause': {
+        if (!rest[0]) {
+          await openControl($)
+          return { text: 'Code Buddy · control panel opened. Or pause from here: /code-buddy pause <guard | blast | replay | agents | all> [30m].' }
+        }
+        const f = featureOf(rest[0])
+        if (f === null) return { text: `Unknown feature "${rest[0]}". Features: guard, blast, replay, agents, all.` }
+        const ms = parseDuration(rest.slice(1).join(' '))
+        if (ms === null) return { text: 'Give a duration like 30m, 2h or 90s, or nothing to pause until you resume.' }
+        if (f !== 'all' && !enabled[f]) return { text: `${nameOf(f)} is already off in the settings. Turn it on with /code-buddy config ${FEATURES.find(x => x.id === f)?.key === 'stagingGuard' ? 'stagingguard' : f} on.` }
+        return { text: await pauseFeature($, f, ms, enabled) }
+      }
+      case 'resume': {
+        const f = rest[0] ? featureOf(rest[0]) : 'all'
+        if (f === null) return { text: `Unknown feature "${rest[0]}". Features: guard, blast, replay, agents, all.` }
+        return { text: await resumeFeature($, f) }
+      }
       default:
-        return { text: `Unknown option "${sub}". Try /code-buddy, /code-buddy replay, /code-buddy agents or /code-buddy config.` }
+        return { text: `Unknown option "${sub}". Try /code-buddy, /code-buddy control, /code-buddy pause, /code-buddy replay, /code-buddy agents or /code-buddy config.` }
     }
   })
 
@@ -531,7 +701,7 @@ export const register: Register = (on, options) => {
     const agentId = e.agentId
     const entryId = agentId !== undefined ? await startDetailEntry($, agentId, input) : ''
     const result = await (async () => {
-    const found = await inspect($, input, cfg)
+    const found = await inspect($, input, cfg, enabled)
     if (found !== null) {
       const outcome = await hold($, next.signal, String(e.tool), found, e.agentId !== undefined)
       if (outcome !== 'proceeded') {
@@ -540,7 +710,7 @@ export const register: Register = (on, options) => {
       }
       $.ui.toast('Code Buddy: running it')
     }
-    if (!EDIT_TOOLS.has(String(e.tool))) return next(e)
+    if (!EDIT_TOOLS.has(String(e.tool)) || !(await isActive($, enabled, 'replay'))) return next(e)
     let step: ReplayStep | null = null
     try {
       step = await stepFor($, input)
@@ -562,7 +732,7 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) =>
     next.called
       ? next(e)
-      : cfg.isOn && (looksRisky(e as unknown as Record<string, unknown>, cfg) || (e.tool === 'Bash' && looksDestructive(String(e.command))))
+      : (enabled.guard && looksRisky(e as unknown as Record<string, unknown>, cfg)) || (enabled.blast && e.tool === 'Bash' && looksDestructive(String(e.command)))
         ? { deny: 'Code Buddy could not finish checking this call, and it looks risky, so it was refused. Do not retry it unless the user asks you to.' }
         : next(e),
   )
@@ -582,6 +752,7 @@ export const register: Register = (on, options) => {
   on('agent.spawn', async ($, e, next) => {
     const started = await next(e)
     if (started.deny !== undefined) return started
+    if (!(await isActive($, enabled, 'agents'))) return started
     try {
       const at = await $.clock.now()
       const batch = (await $.state.get(BATCH)).value ?? 0
@@ -701,6 +872,36 @@ export const register: Register = (on, options) => {
     })
   })
 
+  on('ui.render', { component: 'Pane', requestId: 'code-buddy-control' }, async ($, e) => {
+    const ui = $.ui.resolve(e)
+    const p = await pausesOf($)
+    const now = await $.clock.now()
+    const log = (await $.state.get(LOG)).value ?? []
+    const view = {
+      version,
+      held: log.length,
+      features: FEATURES.map(f => ({
+        id: f.id,
+        state: !enabled[f.id] ? ('off' as const) : isPaused(p, f.id, now) ? ('paused' as const) : ('on' as const),
+        left: leftText(p, f.id, now),
+      })),
+      settings: {
+        production: cfg.production.join(', '),
+        staging: cfg.staging.join(', '),
+        branch: cfg.branches.join(', '),
+        budget: acfg.budget > 0 ? String(acfg.budget) : 'off',
+        autoOpen: acfg.autoOpen,
+      },
+    }
+    return drawControl(ui, e.surface, view, e.props.bodyColumns, {
+      pause: (f, ms) => void pauseFeature($, f, ms, enabled),
+      resume: f => void resumeFeature($, f),
+      setOn: (f, turnOn) => void setFeatureOn($, f, turnOn, options as Record<string, unknown>),
+      set: (field, value) => void saveSetting($, field, value),
+      setAutoOpen: turnOn => void $.config.set({ key: 'code-buddy.autoOpenAgents', value: turnOn }),
+    })
+  })
+
   on('ui.render', { component: 'Pane', requestId: 'code-buddy-hold' }, async ($, e) => {
     const ui = $.ui.resolve(e)
     const queue = (await $.state.get(QUEUE)).value ?? []
@@ -721,14 +922,19 @@ export const register: Register = (on, options) => {
     const all = (await $.state.get(AGENTS)).value ?? []
     const spend = budgetOf(all, acfg.budget)
     const runs = barRuns(all, (await $.state.get(BATCH)).value ?? 0)
-    if (runs.some(a => a.status === 'running') || (e.props.isWorking && runs.length > 0)) {
+    const agentsOn = await isActive($, enabled, 'agents')
+    if (agentsOn && (runs.some(a => a.status === 'running') || (e.props.isWorking && runs.length > 0))) {
       return drawAgentsBand(ui, e.surface, runs, e.props.bodyColumns, spend?.isOver ?? false, () => void toggleAgents($))
     }
     const replay = (await $.state.get(REPLAY)).value
-    if (replay && !replay.isSeen && replay.steps.length > 0 && !e.props.isWorking) {
+    if (replay && !replay.isSeen && replay.steps.length > 0 && !e.props.isWorking && (await isActive($, enabled, 'replay'))) {
       return drawReplayBand(ui, e.surface, replay, e.props.bodyColumns, () => void openReplay($))
     }
     const log = (await $.state.get(LOG)).value ?? []
-    return drawIdleBand(ui, e.surface, cfg.isOn, log.length, e.props.bodyColumns, spend?.isOver ? `over budget · ${spend.used}` : '')
+    const p = await pausesOf($)
+    const now = await $.clock.now()
+    const paused = FEATURES.filter(f => enabled[f.id] && isPaused(p, f.id, now)).map(f => `${f.name} · ${leftText(p, f.id, now)}`)
+    const holdsOn = (enabled.guard && !isPaused(p, 'guard', now)) || (enabled.blast && !isPaused(p, 'blast', now))
+    return drawIdleBand(ui, e.surface, holdsOn, log.length, e.props.bodyColumns, spend?.isOver ? `over budget · ${spend.used}` : '', paused, () => void resumeFeature($, 'all'))
   })
 }

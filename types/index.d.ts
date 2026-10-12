@@ -129,6 +129,9 @@ export type AgentDetail = {
   lastActivityAt: number
 }
 
+/** Paused features: when each pause ends (ms since the epoch), 0 for until resumed. */
+export type Pauses = { guard?: number; blast?: number; replay?: number; agents?: number }
+
 /** The agents panel's own state. */
 export type AgentsUi = {
   /** The subagent whose details are shown, or none for the list. */
@@ -152,6 +155,8 @@ declare module 'claude-code' {
       /** Counts main prompts, so the bar knows which subagents are this prompt's. */
       batch: number
       agentsUi: AgentsUi
+      /** Features paused for this session (Feature 5, the control panel). */
+      pauses: Pauses
       /** A window has been attached to this session, so holds wait for an answer (survives reloads). */
       seenSurface: boolean
       /** Per subagent, by its run id. */

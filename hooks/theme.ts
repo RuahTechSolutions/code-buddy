@@ -87,7 +87,7 @@ function badge(x: number, y: number, h: number, label: string, alert: boolean): 
 const BAND_H = 24
 
 /** Idle band: badge, guard state, how many calls were held. */
-export function idleBandSvg(W: number, isOn: boolean, held: number, overBudget = ''): string {
+export function idleBandSvg(W: number, isOn: boolean, held: number, overBudget = '', paused: string[] = []): string {
   const b = badge(0, 2, 20, 'Code Buddy', false)
   let x = b.w + 12
   const dot = isOn
@@ -104,8 +104,22 @@ export function idleBandSvg(W: number, isOn: boolean, held: number, overBudget =
   const over = overBudget
     ? `<rect x="${x}" y="4" width="${ow}" height="16" rx="8" fill="${BRAND.coral}" fill-opacity=".16"/><text x="${x + ow / 2}" y="${BAND_H / 2 + 4}" text-anchor="middle" font-family="${FONT}" font-size="11.5" font-weight="700" fill="${BRAND.coral}">${xml(overBudget)}</text>`
     : ''
-  return svg(W, BAND_H, `${b.body}${dot}${guard}${chip}${over}`)
+  x += overBudget ? ow + 8 : 0
+  const pausedSvg = paused
+    .map(label => {
+      const text = `⏸ ${label}`
+      const pw = Math.round(textWidth(text, 11.5) + 18)
+      const out = `<rect x="${x}" y="4" width="${pw}" height="16" rx="8" fill="${BRAND.coral}" fill-opacity=".14"/><text x="${x + pw / 2}" y="${BAND_H / 2 + 4}" text-anchor="middle" font-family="${FONT}" font-size="11.5" font-weight="700" fill="${BRAND.coral}">${xml(text)}</text>`
+      x += pw + 6
+      return out
+    })
+    .join('')
+  return svg(W, BAND_H, `${b.body}${dot}${guard}${chip}${over}${pausedSvg}`)
 }
+
+/** How wide the idle band's drawing needs to be for its chips. */
+export const idleBandWidth = (held: number, overBudget: string, paused: string[]): number =>
+  Math.round(260 + (overBudget ? textWidth(overBudget, 11.5) + 26 : 0) + paused.reduce((s, l) => s + textWidth(`⏸ ${l}`, 11.5) + 24, 0))
 
 /** Band while a call waits: coral badge, the rule, the command. */
 export function holdBandSvg(W: number, rule: string, command: string, behind: number): string {
@@ -540,5 +554,48 @@ export function tokenBreakdownSvg(W: number, parts: [string, string, string, num
   return {
     height: H,
     source: svg(W, H, `<clipPath id="cb-tbar"><rect x="0" y="0" width="${W}" height="10" rx="5"/></clipPath><g clip-path="url(#cb-tbar)"><rect class="chip" x="0" y="0" width="${W}" height="10"/>${bar}</g>${legend}`),
+  }
+}
+
+// ---- Control panel -------------------------------------------------------------
+
+export const CONTROL_HEADER_H = 74
+
+/** The control panel's card: name, version and a one-line summary. */
+export function controlHeaderSvg(W: number, version: string, summary: string): string {
+  const H = CONTROL_HEADER_H
+  return svg(
+    W,
+    H,
+    `<clipPath id="cb-ccard"><rect x="0" y="0" width="${W}" height="${H}" rx="12"/></clipPath>
+<g clip-path="url(#cb-ccard)"><rect x="0" y="0" width="${W}" height="${H}" fill="url(#cb-brand)"/>
+<rect x="0" y="${H - 3}" width="${W}" height="3" fill="url(#cb-glow)" opacity=".9"/></g>
+<circle cx="31" cy="${H / 2}" r="17" fill="${BRAND.white}" fill-opacity=".14"/>
+${wave(0, 0, BRAND.white).replace('<g transform="translate(0,0)"', `<g transform="translate(22.5,${H / 2 - 8}) scale(1.25)"`)}
+<text x="60" y="30" font-family="${FONT}" font-size="15" font-weight="600" fill="${BRAND.white}">Code Buddy${version ? ` <tspan font-size="11.5" font-weight="500" fill-opacity=".75">v${xml(version)}</tspan>` : ''}</text>
+<text x="60" y="49" font-family="${FONT}" font-size="11.5" fill="${BRAND.white}" fill-opacity=".8">${xml(fit(summary, 11.5, W - 76))}</text>`,
+  )
+}
+
+export type FeatureState = 'on' | 'paused' | 'off'
+
+/** One feature: its name and what it does, and a chip with its state. */
+export function featureRowSvg(W: number, name: string, what: string, state: FeatureState, left: string): { source: string; height: number } {
+  const chip = state === 'on' ? 'On' : state === 'off' ? 'Off' : `Paused · ${left}`
+  const cw = Math.round(textWidth(chip, 11) + 22)
+  const color = state === 'on' ? GREEN : state === 'off' ? BRAND.muted : BRAND.coral
+  const lines = wrapLines(what, 11.5, W - 4, 2)
+  const H = 30 + lines.length * 16
+  return {
+    height: H,
+    source: svg(
+      W,
+      H,
+      `<text class="t" x="0" y="17" font-family="${FONT}" font-size="13.5" font-weight="600">${xml(fit(name, 13.5, W - cw - 12))}</text>
+<rect x="${W - cw}" y="4" width="${cw}" height="19" rx="9.5" fill="${color}" fill-opacity=".14"/>
+<circle cx="${W - cw + 10}" cy="13.5" r="3" fill="${color}"/>
+<text x="${W - cw + 17}" y="17.5" font-family="${FONT}" font-size="11" font-weight="700" fill="${color}">${xml(chip)}</text>
+${lines.map((l, i) => `<text class="m" x="0" y="${36 + i * 16}" font-family="${FONT}" font-size="11.5">${xml(l)}</text>`).join('')}`,
+    ),
   }
 }
