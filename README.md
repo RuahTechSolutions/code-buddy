@@ -58,6 +58,7 @@ Every setting can also be changed in the control panel (`/code-buddy control`): 
 | Command | What it does |
 | --- | --- |
 | `/code-buddy` | Status, settings, and this session's held calls with their outcomes. |
+| `/code-buddy:code-buddy` | The same command, from the plugin's command file. The desktop app's `/` menu lists this one before a session has started; it answers exactly like `/code-buddy`. |
 | `/code-buddy replay` | Opens the replay of the last turn's edits. |
 | `/code-buddy agents` | Opens or closes the agents panel (also the band's **Agents** button, hotkey `a`). Inside it, **Compact** / **Expand** (hotkey `x`) switches between full rows and one line per subagent. |
 | `/code-buddy config` | Shows the settings, or changes one. |

@@ -141,3 +141,14 @@ describe('control panel', () => {
     ])
   })
 })
+
+describe('the / menu', () => {
+  test('/code-buddy:code-buddy (the command file) answers like /code-buddy and stays out of a live menu', async ($, on) => {
+    world(on)
+    on('command.describe', ($, e) => ({ description: e.description, argumentHint: e.argumentHint, isHidden: e.isHidden }))
+    const out = await $.command.run({ ...run('config'), command: 'code-buddy:code-buddy' })
+    expect(out.text).toContain('Code Buddy settings')
+    const described = await $.command.describe({ command: 'code-buddy:code-buddy', description: 'x', isHidden: false, immediate: false, provider: { plugin: 'code-buddy', tier: 'user' } })
+    expect(described.isHidden).toBe(true)
+  })
+})

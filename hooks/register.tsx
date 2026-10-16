@@ -604,6 +604,58 @@ async function setConfig($: EngineInterface, args: string, cfg: GuardConfig, acf
   return `${field.label} set to ${text}. Code Buddy reloads with it now.`
 }
 
+/** What /code-buddy answers, for every subcommand. */
+async function answerBuddy(
+  $: EngineInterface,
+  args: string,
+  cfg: GuardConfig,
+  acfg: AgentsConfig,
+  enabled: Record<Feature, boolean>,
+): Promise<{ text: string }> {
+  const [sub = '', ...rest] = args.trim().split(/\s+/)
+  switch (sub.toLowerCase()) {
+    case '':
+    case 'status':
+      return { text: await statusText($, cfg, acfg, enabled) }
+    case 'config':
+      return { text: await setConfig($, rest.join(' '), cfg, acfg, enabled) }
+    case 'replay': {
+      const r = (await $.state.get(REPLAY)).value
+      if (!(await openReplay($)) || !r) return { text: 'Code Buddy · replay: no edits recorded yet. It fills after a turn that edits files.' }
+      return { text: `Code Buddy · replay: ${r.steps.length} ${r.steps.length === 1 ? 'edit' : 'edits'} from the last turn. Prev, Next and Close step through them.` }
+    }
+    case 'agents': {
+      const isOpen = await toggleAgents($)
+      const n = ((await $.state.get(AGENTS)).value ?? []).length
+      return { text: isOpen ? `Code Buddy · agents panel opened (${n} ${n === 1 ? 'subagent' : 'subagents'} this session).` : 'Code Buddy · agents panel closed.' }
+    }
+    case 'control':
+    case 'settings':
+    case 'features':
+      await openControl($)
+      return { text: 'Code Buddy · control panel opened.' }
+    case 'pause': {
+      if (!rest[0]) {
+        await openControl($)
+        return { text: 'Code Buddy · control panel opened. Or pause from here: /code-buddy pause <guard | blast | replay | agents | all> [30m].' }
+      }
+      const f = featureOf(rest[0])
+      if (f === null) return { text: `Unknown feature "${rest[0]}". Features: guard, blast, replay, agents, all.` }
+      const ms = parseDuration(rest.slice(1).join(' '))
+      if (ms === null) return { text: 'Give a duration like 30m, 2h or 90s, or nothing to pause until you resume.' }
+      if (f !== 'all' && !enabled[f]) return { text: `${nameOf(f)} is already off in the settings. Turn it on with /code-buddy config ${FEATURES.find(x => x.id === f)?.key === 'stagingGuard' ? 'stagingguard' : f} on.` }
+      return { text: await pauseFeature($, f, ms, enabled) }
+    }
+    case 'resume': {
+      const f = rest[0] ? featureOf(rest[0]) : 'all'
+      if (f === null) return { text: `Unknown feature "${rest[0]}". Features: guard, blast, replay, agents, all.` }
+      return { text: await resumeFeature($, f) }
+    }
+    default:
+      return { text: `Unknown option "${sub}". Try /code-buddy, /code-buddy control, /code-buddy pause, /code-buddy replay, /code-buddy agents or /code-buddy config.` }
+  }
+}
+
 // ---- Hooks -------------------------------------------------------------------
 
 export const register: Register = (on, options) => {
@@ -642,50 +694,14 @@ export const register: Register = (on, options) => {
     return started
   })
 
-  on('command.run', { command: 'code-buddy' }, async ($, e) => {
-    const [sub = '', ...rest] = e.args.trim().split(/\s+/)
-    switch (sub.toLowerCase()) {
-      case '':
-      case 'status':
-        return { text: await statusText($, cfg, acfg, enabled) }
-      case 'config':
-        return { text: await setConfig($, rest.join(' '), cfg, acfg, enabled) }
-      case 'replay': {
-        const r = (await $.state.get(REPLAY)).value
-        if (!(await openReplay($)) || !r) return { text: 'Code Buddy · replay: no edits recorded yet. It fills after a turn that edits files.' }
-        return { text: `Code Buddy · replay: ${r.steps.length} ${r.steps.length === 1 ? 'edit' : 'edits'} from the last turn. Prev, Next and Close step through them.` }
-      }
-      case 'agents': {
-        const isOpen = await toggleAgents($)
-        const n = ((await $.state.get(AGENTS)).value ?? []).length
-        return { text: isOpen ? `Code Buddy · agents panel opened (${n} ${n === 1 ? 'subagent' : 'subagents'} this session).` : 'Code Buddy · agents panel closed.' }
-      }
-      case 'control':
-      case 'settings':
-      case 'features':
-        await openControl($)
-        return { text: 'Code Buddy · control panel opened.' }
-      case 'pause': {
-        if (!rest[0]) {
-          await openControl($)
-          return { text: 'Code Buddy · control panel opened. Or pause from here: /code-buddy pause <guard | blast | replay | agents | all> [30m].' }
-        }
-        const f = featureOf(rest[0])
-        if (f === null) return { text: `Unknown feature "${rest[0]}". Features: guard, blast, replay, agents, all.` }
-        const ms = parseDuration(rest.slice(1).join(' '))
-        if (ms === null) return { text: 'Give a duration like 30m, 2h or 90s, or nothing to pause until you resume.' }
-        if (f !== 'all' && !enabled[f]) return { text: `${nameOf(f)} is already off in the settings. Turn it on with /code-buddy config ${FEATURES.find(x => x.id === f)?.key === 'stagingGuard' ? 'stagingguard' : f} on.` }
-        return { text: await pauseFeature($, f, ms, enabled) }
-      }
-      case 'resume': {
-        const f = rest[0] ? featureOf(rest[0]) : 'all'
-        if (f === null) return { text: `Unknown feature "${rest[0]}". Features: guard, blast, replay, agents, all.` }
-        return { text: await resumeFeature($, f) }
-      }
-      default:
-        return { text: `Unknown option "${sub}". Try /code-buddy, /code-buddy control, /code-buddy pause, /code-buddy replay, /code-buddy agents or /code-buddy config.` }
-    }
-  })
+  on('command.run', { command: 'code-buddy' }, async ($, e) => answerBuddy($, e.args, cfg, acfg, enabled))
+
+  // The same command from the plugin's commands/code-buddy.md. That file is
+  // there so the desktop's / menu lists Code Buddy before a session starts (it
+  // builds that menu with hooks off, when /code-buddy above is never registered);
+  // with hooks on, it answers exactly as /code-buddy does and stays out of the menu.
+  on('command.run', { command: 'code-buddy:code-buddy' }, async ($, e) => answerBuddy($, e.args, cfg, acfg, enabled))
+  on('command.describe', { command: 'code-buddy:code-buddy' }, ($, e, next) => next({ ...e, isHidden: true }))
 
   // Features 1 and 2: hold a risky call until the person answers.
   // Feature 3: record each file edit that runs, never changing it.
